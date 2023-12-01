@@ -1,5 +1,7 @@
 local shh = {}
 
+-- Math Helpers
+
 local SH = {}
 SH.__index = SH
 
@@ -117,6 +119,281 @@ function SH:scale(s)
       self[i][c] = self[i][c] * s
     end
   end
+end
+
+-- Shaders
+
+local cubeShader = [[
+#define RGBA8 0
+#define RGBA16F 1
+#define RGBA32F 2
+#define RG11B10F 3
+
+layout(constant_id = 0) const uint FORMAT = RGBA8;
+
+layout(binding = 0, rgba8) uniform readonly imageCube CubemapRGBA8;
+layout(binding = 0, rgba16f) uniform readonly imageCube CubemapRGBA16F;
+layout(binding = 0, rgba32f) uniform readonly imageCube CubemapRGBA32F;
+layout(binding = 0, r11f_g11f_b10f) uniform readonly imageCube CubemapRG11B10F;
+layout(binding = 1, std430) buffer writeonly Basis { vec3 basis[9]; };
+
+#define THREADS 96
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 6) in;
+shared vec3 coefficients[THREADS][9];
+shared float totalAngle[THREADS];
+
+void lovrmain() {
+  uint id = LocalThreadIndex;
+  uint face = LocalThreadID.z;
+
+  totalAngle[id] = 0.;
+  for (int i = 0; i < 9; i++) {
+    coefficients[id][i] = vec3(0.);
+  }
+
+  int size = imageSize(CubemapRGBA8).x;
+  int tile = size / int(WorkgroupSize.x);
+  ivec2 origin = ivec2(LocalThreadID.xy) * tile;
+
+  for (int y = 0; y < tile; y++) {
+    for (int x = 0; x < tile; x++) {
+      ivec2 xy = origin + ivec2(x, y);
+      vec2 uv = (xy + .5) / size * 2. - 1.;
+
+      vec3 dir;
+      switch (face) {
+        case 0: dir = vec3(-1., -uv.y, -uv.x); break;
+        case 1: dir = vec3(+1., -uv.y, +uv.x); break;
+        case 2: dir = vec3(-uv.x, +1., +uv.y); break;
+        case 3: dir = vec3(-uv.x, -1., -uv.y); break;
+        case 4: dir = vec3(-uv.x, -uv.y, +1.); break;
+        case 5: dir = vec3(+uv.x, -uv.y, -1.); break;
+      }
+
+      float len2 = dot(dir, dir);
+      float len = sqrt(len2);
+      dir *= 1. / len;
+
+      float solidAngle = 4. / (len2 * len); // (uv^2)^(3/2) == len(uv)^2 * len(uv)
+      totalAngle[id] += solidAngle;
+
+      vec3 color;
+      ivec3 texel = ivec3(xy, face);
+      if (FORMAT == RGBA8) color = gammaToLinear(imageLoad(CubemapRGBA8, texel).rgb);
+      if (FORMAT == RGBA16F) color = imageLoad(CubemapRGBA16F, texel).rgb;
+      if (FORMAT == RGBA32F) color = imageLoad(CubemapRGBA32F, texel).rgb;
+      if (FORMAT == RG11B10F) color = imageLoad(CubemapRG11B10F, texel).rgb;
+      color *= solidAngle;
+
+      coefficients[id][0] += color * .28209479177388;
+      coefficients[id][1] += color * .48860251190292 * dir.y;
+      coefficients[id][2] += color * .48860251190292 * dir.z;
+      coefficients[id][3] += color * .48860251190292 * dir.x;
+      coefficients[id][4] += color * 1.0925484305921 * dir.x * dir.y;
+      coefficients[id][5] += color * 1.0925484305921 * dir.y * dir.z;
+      coefficients[id][6] += color * .31539156525252 * (3. * dir.z * dir.z - 1.);
+      coefficients[id][7] += color * 1.0925484305921 * dir.x * dir.z;
+      coefficients[id][8] += color * .54627421529604 * (dir.x * dir.x - dir.y * dir.y);
+    }
+  }
+
+  barrier();
+
+  if (id == 0) {
+    for (int t = 1; t < THREADS; t++) {
+      totalAngle[0] += totalAngle[t];
+      for (int i = 0; i < 9; i++) {
+        coefficients[0][i] += coefficients[t][i];
+      }
+    }
+
+    float scale = 4. * PI / totalAngle[0];
+
+    for (int i = 0; i < 9; i++) {
+      basis[i] = coefficients[0][i] * scale;
+    }
+  }
+}
+]]
+
+local equirectShader = [[
+#define RGBA8 0
+#define RGBA16F 1
+#define RGBA32F 2
+#define RG11B10F 3
+
+layout(constant_id = 0) const uint FORMAT = RGBA8;
+
+layout(binding = 0, rgba8) uniform readonly image2D TextureRGBA8;
+layout(binding = 0, rgba16f) uniform readonly image2D TextureRGBA16F;
+layout(binding = 0, rgba32f) uniform readonly image2D TextureRGBA32F;
+layout(binding = 0, r11f_g11f_b10f) uniform readonly image2D TextureRG11B10F;
+layout(binding = 1, std430) buffer writeonly Basis { vec3 basis[9]; };
+
+#define THREADS 64
+layout(local_size_x = 8, local_size_y = 8) in;
+shared vec3 coefficients[THREADS][9];
+shared float totalAngle[THREADS];
+
+void lovrmain() {
+  uint id = LocalThreadIndex;
+
+  totalAngle[id] = 0.;
+  for (int i = 0; i < 9; i++) {
+    coefficients[id][i] = vec3(0.);
+  }
+
+  ivec2 size = imageSize(TextureRGBA8);
+  ivec2 tile = (size + ivec2(7, 7)) / ivec2(WorkgroupSize.xy);
+  ivec2 origin = ivec2(LocalThreadID.xy) * tile;
+  float width = size.x;
+  float height = size.y;
+
+  for (int y = 0; y < tile.y; y++) {
+    if (origin.y + y >= size.y) continue;
+    float phi = (origin.y + y) / height * PI;
+    float sinphi = sin(phi);
+    float cosphi = cos(phi);
+
+    for (int x = 0; x < tile.x; x++) {
+      if (origin.x + x >= size.x) continue;
+      float theta = (.75 - x / width) * 2. * PI;
+
+      float solidAngle = (2. * PI / width) * (PI / height) * abs(sinphi);
+      totalAngle[id] += solidAngle;
+
+      vec3 color;
+      ivec2 texel = origin + ivec2(x, y);
+      if (FORMAT == RGBA8) color = gammaToLinear(imageLoad(TextureRGBA8, texel).rgb);
+      if (FORMAT == RGBA16F) color = imageLoad(TextureRGBA16F, texel).rgb;
+      if (FORMAT == RGBA32F) color = imageLoad(TextureRGBA32F, texel).rgb;
+      if (FORMAT == RG11B10F) color = imageLoad(TextureRG11B10F, texel).rgb;
+      color *= solidAngle;
+
+      vec3 dir = normalize(vec3(cos(theta) * sinphi, cosphi, -sin(theta) * sinphi));
+      coefficients[id][0] += color * .28209479177388;
+      coefficients[id][1] += color * .48860251190292 * dir.y;
+      coefficients[id][2] += color * .48860251190292 * dir.z;
+      coefficients[id][3] += color * .48860251190292 * dir.x;
+      coefficients[id][4] += color * 1.0925484305921 * dir.x * dir.y;
+      coefficients[id][5] += color * 1.0925484305921 * dir.y * dir.z;
+      coefficients[id][6] += color * .31539156525252 * (3. * dir.z * dir.z - 1.);
+      coefficients[id][7] += color * 1.0925484305921 * dir.x * dir.z;
+      coefficients[id][8] += color * .54627421529604 * (dir.x * dir.x - dir.y * dir.y);
+    }
+  }
+
+  barrier();
+
+  if (id == 0) {
+    for (int t = 1; t < THREADS; t++) {
+      totalAngle[0] += totalAngle[t];
+      for (int i = 0; i < 9; i++) {
+        coefficients[0][i] += coefficients[t][i];
+      }
+    }
+
+    float scale = 4. * PI / totalAngle[0];
+
+    for (int i = 0; i < 9; i++) {
+      basis[i] = coefficients[0][i] * scale;
+    }
+  }
+}
+]]
+
+local formatCodes = {
+  rgba8 = 0,
+  rgba16f = 1,
+  rgba32f = 2,
+  rg11b10f = 3
+}
+
+local shaders = {}
+
+local function getComputeShader(type, format)
+  local options = { flags = { FORMAT = formatCodes[format] } }
+
+  if not shaders[type] then
+    shaders[type] = {}
+    local code = type == 'cubemap' and cubeShader or equirectShader
+    shaders[type][format] = lovr.graphics.newShader(code, options)
+  else
+    shaders[type][format] = shaders[type][next(shaders[type])]:clone(options)
+  end
+
+  return shaders[type][format]
+end
+
+function shh.fromCubemap(pass, texture, buffer, offset)
+  local format, width, height = texture:getFormat(), texture:getDimensions()
+
+  assert(texture:getType() == 'cube', 'Hey wait this isn\'t even a cubemap!  lol')
+  assert(formatCodes[format], ('Unsupported texture format %q'):format(format))
+  assert(width % 4 == 0, 'Currently, cubemap dimensions must be a multiple of 4 (please open issue)')
+
+  if not buffer then buffer = lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9) end
+
+  pass:push('state')
+  pass:setShader(getComputeShader('cubemap', format))
+  pass:send('Basis', buffer, offset)
+  pass:send('CubemapRGBA8', texture)
+  pass:compute()
+  pass:pop('state')
+
+  return buffer
+end
+
+local equirectShaders = {}
+
+function shh.fromEquirect(pass, texture, buffer, offset)
+  local format, width, height = texture:getFormat(), texture:getDimensions()
+
+  assert(texture:getType() == '2d', 'Hey wait this isn\'t even a 2D texture!  lol')
+  assert(formatCodes[format], ('Unsupported texture format %q'):format(format))
+
+  if not buffer then buffer = lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9) end
+
+  pass:push('state')
+  pass:setShader(getComputeShader('equirect', format))
+  pass:send('Basis', buffer, offset)
+  pass:send('TextureRGBA8', texture)
+  pass:compute()
+  pass:pop('state')
+
+  return buffer
+end
+
+-- Convenience shader helper
+
+local shader
+function shh.setShader(pass, ...)
+  if not shader then
+    shader = lovr.graphics.newShader('unlit', [[
+      layout(set = 2, binding = 0) uniform SH { vec3 sh[9]; };
+
+      vec3 evaluateSH(vec3 sh[9], vec3 n) {
+        return max(
+          .88622692545276 * sh[0] +
+          1.0233267079465 * sh[1] * n.y +
+          1.0233267079465 * sh[2] * n.z +
+          1.0233267079465 * sh[3] * n.x +
+          .85808553080978 * sh[4] * n.x * n.y +
+          .85808553080978 * sh[5] * n.y * n.z +
+          .24770795610038 * sh[6] * (3 * n.z * n.z - 1) +
+          .85808553080978 * sh[7] * n.x * n.z +
+          .42904276540489 * sh[8] * (n.x * n.x - n.y * n.y),
+          0
+        );
+      }
+
+      vec4 lovrmain() {
+        return vec4(evaluateSH(sh, normalize(Normal)), 1.);
+      }
+    ]])
+  end
+  pass:setShader(shader)
+  if ... then pass:send('SH', ...) end
 end
 
 return shh
