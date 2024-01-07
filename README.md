@@ -24,12 +24,14 @@ function lovr.load()
   })
 
   SH = shh.new(skybox)
+
+  model = lovr.graphics.newModel('armordillo.glb')
 end
 
 function lovr.draw(pass)
   pass:skybox(skybox)
   shh.setShader(pass, SH)
-  pass:sphere(0, 1.7, -2)
+  pass:draw(model)
 end
 ```
 
