@@ -160,14 +160,16 @@ void lovrmain() {
       ivec2 xy = origin + ivec2(x, y);
       vec2 uv = (xy + .5) / size * 2. - 1.;
 
+      // Note: Z coordinate is flipped to convert to left-handed cubemap coordinate space
+
       vec3 dir;
       switch (face) {
-        case 0: dir = vec3(-1., -uv.y, -uv.x); break;
-        case 1: dir = vec3(+1., -uv.y, +uv.x); break;
-        case 2: dir = vec3(-uv.x, +1., +uv.y); break;
-        case 3: dir = vec3(-uv.x, -1., -uv.y); break;
-        case 4: dir = vec3(-uv.x, -uv.y, +1.); break;
-        case 5: dir = vec3(+uv.x, -uv.y, -1.); break;
+        case 0: dir = vec3(+1., -uv.y, +uv.x); break;
+        case 1: dir = vec3(-1., -uv.y, -uv.x); break;
+        case 2: dir = vec3(+uv.x, +1., -uv.y); break;
+        case 3: dir = vec3(+uv.x, -1., +uv.y); break;
+        case 4: dir = vec3(+uv.x, -uv.y, -1.); break;
+        case 5: dir = vec3(-uv.x, -uv.y, +1.); break;
       }
 
       float len2 = dot(dir, dir);
