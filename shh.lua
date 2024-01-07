@@ -131,10 +131,10 @@ local cubeShader = [[
 
 layout(constant_id = 0) const uint FORMAT = RGBA8;
 
-layout(binding = 0, rgba8) uniform readonly imageCube CubemapRGBA8;
-layout(binding = 0, rgba16f) uniform readonly imageCube CubemapRGBA16F;
-layout(binding = 0, rgba32f) uniform readonly imageCube CubemapRGBA32F;
-layout(binding = 0, r11f_g11f_b10f) uniform readonly imageCube CubemapRG11B10F;
+layout(binding = 0, rgba8) uniform readonly imageCube TextureRGBA8;
+layout(binding = 0, rgba16f) uniform readonly imageCube TextureRGBA16F;
+layout(binding = 0, rgba32f) uniform readonly imageCube TextureRGBA32F;
+layout(binding = 0, r11f_g11f_b10f) uniform readonly imageCube TextureRG11B10F;
 layout(binding = 1, std430) buffer writeonly Basis { vec3 basis[9]; };
 
 #define THREADS 96
@@ -151,7 +151,7 @@ void lovrmain() {
     coefficients[id][i] = vec3(0.);
   }
 
-  int size = imageSize(CubemapRGBA8).x;
+  int size = imageSize(TextureRGBA8).x;
   int tile = size / int(WorkgroupSize.x);
   ivec2 origin = ivec2(LocalThreadID.xy) * tile;
 
@@ -181,10 +181,10 @@ void lovrmain() {
 
       vec3 color;
       ivec3 texel = ivec3(xy, face);
-      if (FORMAT == RGBA8) color = gammaToLinear(imageLoad(CubemapRGBA8, texel).rgb);
-      if (FORMAT == RGBA16F) color = imageLoad(CubemapRGBA16F, texel).rgb;
-      if (FORMAT == RGBA32F) color = imageLoad(CubemapRGBA32F, texel).rgb;
-      if (FORMAT == RG11B10F) color = imageLoad(CubemapRG11B10F, texel).rgb;
+      if (FORMAT == RGBA8) color = gammaToLinear(imageLoad(TextureRGBA8, texel).rgb);
+      if (FORMAT == RGBA16F) color = imageLoad(TextureRGBA16F, texel).rgb;
+      if (FORMAT == RGBA32F) color = imageLoad(TextureRGBA32F, texel).rgb;
+      if (FORMAT == RG11B10F) color = imageLoad(TextureRG11B10F, texel).rgb;
       color *= solidAngle;
 
       coefficients[id][0] += color * .28209479177388;
@@ -313,51 +313,37 @@ local formatCodes = {
 
 local shaders = {}
 
-local function getComputeShader(type, format)
+local function getComputeShader(kind, format)
   local options = { flags = { FORMAT = formatCodes[format] } }
 
-  if not shaders[type] then
-    shaders[type] = {}
-    local code = type == 'cubemap' and cubeShader or equirectShader
-    shaders[type][format] = lovr.graphics.newShader(code, options)
+  if not shaders[kind] then
+    shaders[kind] = {}
+    local code = kind == 'cube' and cubeShader or equirectShader
+    shaders[kind][format] = lovr.graphics.newShader(code, options)
   else
-    shaders[type][format] = shaders[type][next(shaders[type])]:clone(options)
+    shaders[kind][format] = shaders[kind][next(shaders[kind])]:clone(options)
   end
 
-  return shaders[type][format]
+  return shaders[kind][format]
 end
 
-function shh.fromCubemap(pass, texture, buffer, offset)
-  local format, width, height = texture:getFormat(), texture:getDimensions()
+function shh.fromTexture(pass, texture, buffer, offset)
+  local kind, format, width, height = texture:getType(), texture:getFormat(), texture:getDimensions()
 
-  assert(texture:getType() == 'cube', 'Hey wait this isn\'t even a cubemap!  lol')
-  assert(formatCodes[format], ('Unsupported texture format %q'):format(format))
-  assert(width % 4 == 0, 'Currently, cubemap dimensions must be a multiple of 4 (please open issue)')
+  if kind == 'cube' then
+    assert(width % 4 == 0, 'Currently, cubemap dimensions must be a multiple of 4 (please open issue)')
+  elseif kind == '2d' then
+    assert(width == 2 * height, '2D equirectangular textures should have a 2:1 aspect ratio')
+  else
+    error('Expected 2d or cubemap texture')
+  end
 
-  if not buffer then buffer = lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9) end
-
-  pass:push('state')
-  pass:setShader(getComputeShader('cubemap', format))
-  pass:send('Basis', buffer, offset)
-  pass:send('CubemapRGBA8', texture)
-  pass:compute()
-  pass:pop('state')
-
-  return buffer
-end
-
-local equirectShaders = {}
-
-function shh.fromEquirect(pass, texture, buffer, offset)
-  local format, width, height = texture:getFormat(), texture:getDimensions()
-
-  assert(texture:getType() == '2d', 'Hey wait this isn\'t even a 2D texture!  lol')
   assert(formatCodes[format], ('Unsupported texture format %q'):format(format))
 
   if not buffer then buffer = lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9) end
 
   pass:push('state')
-  pass:setShader(getComputeShader('equirect', format))
+  pass:setShader(getComputeShader(kind, format))
   pass:send('Basis', buffer, offset)
   pass:send('TextureRGBA8', texture)
   pass:compute()
