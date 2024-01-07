@@ -42,10 +42,6 @@ function SH:set(t)
       self[i][2] = t[b + 2]
       self[i][3] = t[b + 3]
     end
-  elseif type(t) == 'string' then
-    local texture = lovr.graphics.newTexture(t, { usage = { 'storage' } })
-    self:set(texture)
-    texture:release()
   elseif type(t) == 'userdata' and t:type() == 'Texture' then
     tempPass = tempPass or lovr.graphics.newPass()
     tempBuffer = tempBuffer or lovr.graphics.newBuffer('vec4', 9)
