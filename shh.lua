@@ -259,7 +259,7 @@ void lovrmain() {
 
     for (int x = 0; x < tile.x; x++) {
       if (origin.x + x >= size.x) continue;
-      float theta = (.75 - x / width) * 2. * PI;
+      float theta = (.75 - (origin.x + x) / width) * 2. * PI;
 
       float solidAngle = (2. * PI / width) * (PI / height) * abs(sinphi);
       totalAngle[id] += solidAngle;
