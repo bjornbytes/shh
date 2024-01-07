@@ -24,6 +24,8 @@ function SH:clear()
   end
 end
 
+local tempPass
+local tempBuffer
 function SH:set(t)
   if not t then
     self:clear()
@@ -40,6 +42,17 @@ function SH:set(t)
       self[i][2] = t[b + 2]
       self[i][3] = t[b + 3]
     end
+  elseif type(t) == 'string' then
+    local texture = lovr.graphics.newTexture(t, { usage = { 'storage' } })
+    self:set(texture)
+    texture:release()
+  elseif type(t) == 'userdata' and t:type() == 'Texture' then
+    tempPass = tempPass or lovr.graphics.newPass()
+    tempBuffer = tempBuffer or lovr.graphics.newBuffer('vec4', 9)
+    tempPass:reset()
+    shh.compute(tempPass, t, tempBuffer)
+    lovr.graphics.submit(tempPass)
+    return self:set(tempBuffer:getData())
   else
     error('Expected nil, table of numbers, or table of tables')
   end
@@ -135,7 +148,7 @@ layout(binding = 0, rgba8) uniform readonly imageCube TextureRGBA8;
 layout(binding = 0, rgba16f) uniform readonly imageCube TextureRGBA16F;
 layout(binding = 0, rgba32f) uniform readonly imageCube TextureRGBA32F;
 layout(binding = 0, r11f_g11f_b10f) uniform readonly imageCube TextureRG11B10F;
-layout(binding = 1, std430) buffer writeonly Basis { vec3 basis[9]; };
+layout(binding = 1, std140) buffer writeonly Basis { vec3 basis[9]; };
 
 #define THREADS 96
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 6) in;
@@ -230,7 +243,7 @@ layout(binding = 0, rgba8) uniform readonly image2D TextureRGBA8;
 layout(binding = 0, rgba16f) uniform readonly image2D TextureRGBA16F;
 layout(binding = 0, rgba32f) uniform readonly image2D TextureRGBA32F;
 layout(binding = 0, r11f_g11f_b10f) uniform readonly image2D TextureRG11B10F;
-layout(binding = 1, std430) buffer writeonly Basis { vec3 basis[9]; };
+layout(binding = 1, std140) buffer writeonly Basis { vec3 basis[9]; };
 
 #define THREADS 64
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -314,20 +327,20 @@ local formatCodes = {
 local shaders = {}
 
 local function getComputeShader(kind, format)
+  local code = kind == 'cube' and cubeShader or equirectShader
   local options = { flags = { FORMAT = formatCodes[format] } }
 
   if not shaders[kind] then
     shaders[kind] = {}
-    local code = kind == 'cube' and cubeShader or equirectShader
     shaders[kind][format] = lovr.graphics.newShader(code, options)
-  else
+  elseif not shaders[kind][format] then
     shaders[kind][format] = shaders[kind][next(shaders[kind])]:clone(options)
   end
 
   return shaders[kind][format]
 end
 
-function shh.fromTexture(pass, texture, buffer, offset)
+function shh.compute(pass, texture, buffer, offset)
   local kind, format, width, height = texture:getType(), texture:getFormat(), texture:getDimensions()
 
   if kind == 'cube' then
@@ -339,8 +352,6 @@ function shh.fromTexture(pass, texture, buffer, offset)
   end
 
   assert(formatCodes[format], ('Unsupported texture format %q'):format(format))
-
-  if not buffer then buffer = lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9) end
 
   pass:push('state')
   pass:setShader(getComputeShader(kind, format))
