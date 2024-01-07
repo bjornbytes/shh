@@ -390,7 +390,7 @@ function shh.setShader(pass, ...)
       }
 
       vec4 lovrmain() {
-        return vec4(evaluateSH(sh, normalize(Normal)), 1.);
+        return vec4(evaluateSH(sh, normalize(Normal)) / PI, 1.);
       }
     ]])
   end
