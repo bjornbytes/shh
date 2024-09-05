@@ -44,7 +44,7 @@ function SH:set(t)
     end
   elseif type(t) == 'userdata' and t:type() == 'Texture' then
     tempPass = tempPass or lovr.graphics.newPass()
-    tempBuffer = tempBuffer or lovr.graphics.newBuffer('vec4', 9)
+    tempBuffer = tempBuffer or lovr.graphics.newBuffer({ 'vec3', layout = 'std140' }, 9)
     tempPass:reset()
     shh.compute(tempPass, t, tempBuffer)
     lovr.graphics.submit(tempPass)
@@ -140,11 +140,11 @@ local cubeShader = [[
 
 layout(constant_id = 0) const uint FORMAT = RGBA8;
 
-layout(binding = 0, rgba8) uniform readonly imageCube TextureRGBA8;
-layout(binding = 0, rgba16f) uniform readonly imageCube TextureRGBA16F;
-layout(binding = 0, rgba32f) uniform readonly imageCube TextureRGBA32F;
-layout(binding = 0, r11f_g11f_b10f) uniform readonly imageCube TextureRG11B10F;
-layout(binding = 1, std140) buffer writeonly Basis { vec3 basis[9]; };
+layout(rgba8) uniform readonly imageCube TextureRGBA8;
+layout(rgba16f) uniform readonly imageCube TextureRGBA16F;
+layout(rgba32f) uniform readonly imageCube TextureRGBA32F;
+layout(r11f_g11f_b10f) uniform readonly imageCube TextureRG11B10F;
+layout(std140) buffer writeonly Basis { vec3 basis[9]; };
 
 #define THREADS 96
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 6) in;
@@ -160,7 +160,11 @@ void lovrmain() {
     coefficients[id][i] = vec3(0.);
   }
 
-  int size = imageSize(TextureRGBA8).x;
+  int size;
+  if (FORMAT == RGBA8) size = imageSize(TextureRGBA8).x;
+  if (FORMAT == RGBA16F) size = imageSize(TextureRGBA16F).x;
+  if (FORMAT == RGBA32F) size = imageSize(TextureRGBA32F).x;
+  if (FORMAT == RG11B10F) size = imageSize(TextureRG11B10F).x;
   int tile = size / int(WorkgroupSize.x);
   ivec2 origin = ivec2(LocalThreadID.xy) * tile;
 
@@ -233,13 +237,13 @@ local equirectShader = [[
 #define RGBA32F 2
 #define RG11B10F 3
 
-layout(constant_id = 0) const uint FORMAT = RGBA8;
+layout(constant_id = 0) const uint FORMAT = RGBA32F;
 
-layout(binding = 0, rgba8) uniform readonly image2D TextureRGBA8;
-layout(binding = 0, rgba16f) uniform readonly image2D TextureRGBA16F;
-layout(binding = 0, rgba32f) uniform readonly image2D TextureRGBA32F;
-layout(binding = 0, r11f_g11f_b10f) uniform readonly image2D TextureRG11B10F;
-layout(binding = 1, std140) buffer writeonly Basis { vec3 basis[9]; };
+layout(rgba8) uniform readonly image2D TextureRGBA8;
+layout(rgba16f) uniform readonly image2D TextureRGBA16F;
+layout(rgba32f) uniform readonly image2D TextureRGBA32F;
+layout(r11f_g11f_b10f) uniform readonly image2D TextureRG11B10F;
+layout(std140) buffer writeonly Basis { vec3 basis[9]; };
 
 #define THREADS 64
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -254,7 +258,11 @@ void lovrmain() {
     coefficients[id][i] = vec3(0.);
   }
 
-  ivec2 size = imageSize(TextureRGBA8);
+  ivec2 size;
+  if (FORMAT == RGBA8) size = imageSize(TextureRGBA8);
+  if (FORMAT == RGBA16F) size = imageSize(TextureRGBA16F);
+  if (FORMAT == RGBA32F) size = imageSize(TextureRGBA32F);
+  if (FORMAT == RG11B10F) size = imageSize(TextureRG11B10F);
   ivec2 tile = (size + ivec2(7, 7)) / ivec2(WorkgroupSize.xy);
   ivec2 origin = ivec2(LocalThreadID.xy) * tile;
   float width = size.x;
@@ -352,7 +360,7 @@ function shh.compute(pass, texture, buffer, offset)
   pass:push('state')
   pass:setShader(getComputeShader(kind, format))
   pass:send('Basis', buffer, offset)
-  pass:send('TextureRGBA8', texture)
+  pass:send('Texture' .. texture:getFormat():upper(), texture)
   pass:compute()
   pass:pop('state')
 
@@ -365,7 +373,7 @@ local shader
 function shh.setShader(pass, ...)
   if not shader then
     shader = lovr.graphics.newShader('unlit', [[
-      layout(set = 2, binding = 0) uniform SH { vec3 sh[9]; };
+      uniform SH { vec3 sh[9]; };
 
       vec3 evaluateSH(vec3 sh[9], vec3 n) {
         return max(
@@ -388,7 +396,8 @@ function shh.setShader(pass, ...)
     ]])
   end
   pass:setShader(shader)
-  if ... then pass:send('SH', ...) end
+  if type(...) == 'table' then pass:send('SH', { sh = ... })
+  else pass:send('SH', ...) end
 end
 
 return shh
