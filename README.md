@@ -86,7 +86,7 @@ basis and a direction vector, and returns a color:
 ```glsl
 #include "shh/shader.glsl"
 
-layout(set = 2, binding = 0) uniform SH { sh[9]; };
+layout(set = 2, binding = 0) uniform SH { vec3 sh[9]; };
 
 vec4 lovrmain() {
   vec3 color = evaluateSH(sh, normalize(Normal)) / PI;
