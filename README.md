@@ -12,6 +12,9 @@ Spherical harmonics basically store a "ball of light" using some fancy math and 
 of data.  They're similar to a skybox, but more blurry and only take up about 100 bytes!  They're a
 quick, cheap way to add soft diffuse lighting to objects so they look like they belong in a scene.
 
+[Here](https://martinoshelf.neocities.org/spherical-harmonics-lovr) is a blog post that goes into
+more of the math behind spherical harmonics, with great diagrams and sample code!
+
 Example
 ---
 
