@@ -338,7 +338,7 @@ local function getComputeShader(kind, format)
     shaders[kind] = {}
     shaders[kind][format] = lovr.graphics.newShader(code, options)
   elseif not shaders[kind][format] then
-    shaders[kind][format] = shaders[kind][next(shaders[kind])]:clone(options)
+    shaders[kind][format] = shaders[kind][next(shaders[kind])]:clone(options.flags)
   end
 
   return shaders[kind][format]
